@@ -1,0 +1,35 @@
+import { useState } from 'react';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import Input from '../ui/Input';
+import { useProjectStore } from '../../stores/projectStore';
+import { useSchemaStore } from '../../stores/schemaStore';
+
+export default function ProjectEditorModal({ isOpen, onClose }) {
+  const [name, setName] = useState('');
+  const { createProject, setCurrentProject } = useProjectStore();
+  const { fetchSchemas } = useSchemaStore();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const project = await createProject(name.trim());
+    setCurrentProject(project.id);
+    fetchSchemas(project.id);
+    setName('');
+    onClose();
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose}>
+      <h2 className="text-xl font-bold mb-4">Nuovo progetto</h2>
+      <form onSubmit={handleSubmit}>
+        <Input label="Nome progetto" value={name} onChange={(e) => setName(e.target.value)} required />
+        <div className="mt-4 flex justify-end space-x-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Annulla</Button>
+          <Button type="submit">Crea</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
