@@ -1,8 +1,14 @@
 import axios from 'axios';
 import { useAuthStore } from '../stores/authStore';
 
+function resolveBaseUrl() {
+  const configured = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, '');
+  if (!configured) return '/api';
+  return configured.endsWith('/api') ? configured : `${configured}/api`;
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL: resolveBaseUrl(),
 });
 
 api.interceptors.request.use((config) => {
