@@ -6,6 +6,9 @@ import Input from '../ui/Input';
 import api from '../../services/api';
 import { useShapeStore } from '../../stores/shapeStore';
 import { useSchemaStore } from '../../stores/schemaStore';
+import { useRecentColorsStore } from '../../stores/recentColorsStore';
+import ColorPicker from '../ui/ColorPicker';
+import { DEFAULT_SHAPE_COLOR, DEFAULT_TEXT_COLOR } from '../canvas/ShapeNode';
 
 const SHAPES = [
   { value: 'rectangle', label: '▭', title: 'Rettangolo' },
@@ -18,7 +21,8 @@ const SHAPES = [
 export default function ShapeEditorModal({ isOpen, onClose, shape }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [color, setColor] = useState('#3B82F6');
+  const [color, setColor] = useState(DEFAULT_SHAPE_COLOR);
+  const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
   const [shapeType, setShapeType] = useState('rectangle');
   const [linkType, setLinkType] = useState('url');
   const [hyperlink, setHyperlink] = useState('');
@@ -27,6 +31,7 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
   const [uploading, setUploading] = useState(false);
 
   const { updateShape } = useShapeStore();
+  const addRecent = useRecentColorsStore((s) => s.addRecent);
   const { currentSchemaId, schemas } = useSchemaStore();
   const otherSchemas = schemas.filter(s => String(s.id) !== String(currentSchemaId));
 
@@ -34,7 +39,8 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
     if (shape) {
       setTitle(shape.title || '');
       setDescription(shape.description || '');
-      setColor(shape.color || '#3B82F6');
+      setColor(shape.color || DEFAULT_SHAPE_COLOR);
+      setTextColor(shape.text_color || '#FFFFFF');
       setShapeType(shape.shape_type || 'rectangle');
       setImageUrl(shape.image_url || '');
       const hlink = shape.hyperlink || '';
@@ -82,6 +88,7 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
         title,
         description,
         color,
+        text_color: textColor,
         shape_type: shapeType,
         hyperlink: resolvedHyperlink,
         image_url: imageUrl,
@@ -89,9 +96,11 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
         y: shape.y,
         schemaId: currentSchemaId,
       });
+      addRecent('fill', color);
+      addRecent('text', textColor);
       onClose();
-    } catch {
-      alert('Errore nel salvare la forma');
+    } catch (err) {
+      alert(`Errore nel salvare la forma: ${err.response?.data?.error || err.message}`);
     }
   };
 
@@ -99,22 +108,20 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
-      <h2 className="text-xl font-bold mb-4">Modifica forma</h2>
+      <h2 className="text-lg font-semibold text-fg mb-5">Modifica forma</h2>
       <form onSubmit={handleSubmit} className="space-y-4">
-
-        {/* Shape type */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Forma</label>
+          <label className="label">Forma</label>
           <div className="flex gap-1">
             {SHAPES.map(s => (
               <button
                 key={s.value}
                 type="button"
                 title={s.title}
-                className={`flex-1 py-2 text-xl rounded border transition-colors ${
+                className={`flex-1 py-2 text-xl rounded-lg border transition-colors ${
                   shapeType === s.value
-                    ? 'border-blue-500 bg-blue-50 text-blue-600'
-                    : 'border-gray-200 hover:bg-gray-50 text-gray-500'
+                    ? 'border-accent bg-accent-soft text-accent-soft-fg'
+                    : 'border-line text-fg-subtle hover:bg-surface-hover hover:text-fg'
                 }`}
                 onClick={() => setShapeType(s.value)}
               >
@@ -127,44 +134,61 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
         <Input label="Titolo (opzionale)" value={title} onChange={(e) => setTitle(e.target.value)} />
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Descrizione</label>
+          <label className="label">Descrizione</label>
           <textarea
-            className="w-full border border-gray-300 rounded px-3 py-2"
+            className="field resize-none"
             rows="3"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Colore</label>
-          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-12 h-12 p-0 border-0" />
+        <div className="grid grid-cols-2 gap-5">
+          <div>
+            <label className="label">Riempimento</label>
+            <ColorPicker kind="fill" value={color} onChange={setColor} title="Colore di riempimento" />
+          </div>
+          <div>
+            <label className="label">Colore del testo</label>
+            <ColorPicker kind="text" value={textColor} onChange={setTextColor} badge="A" title="Colore del testo" />
+          </div>
+          <div className="col-span-2">
+            <label className="label">Anteprima</label>
+            <div
+              className="grid h-12 place-items-center rounded-lg border border-line text-sm font-semibold"
+              style={{ background: color, color: textColor }}
+            >
+              {title || 'Testo'}
+            </div>
+          </div>
         </div>
 
-        {/* Hyperlink */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Collegamento ipertestuale</label>
-          <div className="flex rounded border border-gray-300 overflow-hidden mb-2">
-            <button
-              type="button"
-              className={`flex-1 py-1.5 text-sm ${linkType === 'url' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-              onClick={() => setLinkType('url')}
-            >
-              URL esterno
-            </button>
-            <button
-              type="button"
-              className={`flex-1 py-1.5 text-sm ${linkType === 'schema' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-              onClick={() => setLinkType('schema')}
-            >
-              Schema del progetto
-            </button>
+          <label className="label">Collegamento ipertestuale</label>
+          <div className="mb-2 flex rounded-lg border border-line p-0.5">
+            {[
+              { key: 'url', label: 'URL esterno' },
+              { key: 'schema', label: 'Schema del progetto' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                className={`flex-1 rounded-md py-1.5 text-sm transition-colors ${
+                  linkType === key
+                    ? 'bg-accent text-accent-fg font-medium'
+                    : 'text-fg-muted hover:bg-surface-hover'
+                }`}
+                onClick={() => setLinkType(key)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           {linkType === 'url' ? (
             <Input placeholder="https://..." value={hyperlink} onChange={(e) => setHyperlink(e.target.value)} />
           ) : (
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              className="field"
               value={linkedSchemaId}
               onChange={(e) => setLinkedSchemaId(e.target.value)}
             >
@@ -176,20 +200,23 @@ export default function ShapeEditorModal({ isOpen, onClose, shape }) {
           )}
         </div>
 
-        {/* Image */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Immagine</label>
-          <div {...getRootProps()} className="border-2 border-dashed p-4 rounded text-center cursor-pointer">
+          <label className="label">Immagine</label>
+          <div
+            {...getRootProps()}
+            className="cursor-pointer rounded-lg border-2 border-dashed border-line bg-surface-sunken p-5
+              text-center transition-colors hover:border-accent hover:bg-accent-soft/30"
+          >
             <input {...getInputProps()} />
             {imageUrl
-              ? <img src={imageUrl} alt="" className="max-h-24 mx-auto" />
-              : <p className="text-gray-500">Trascina un'immagine o clicca per caricare</p>
+              ? <img src={imageUrl} alt="" className="mx-auto max-h-24 rounded-md" />
+              : <p className="text-sm text-fg-muted">Trascina un'immagine o clicca per caricare</p>
             }
           </div>
-          {uploading && <p className="text-sm text-gray-500">Caricamento...</p>}
+          {uploading && <p className="mt-1.5 text-sm text-fg-muted">Caricamento…</p>}
         </div>
 
-        <div className="flex justify-end space-x-2">
+        <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="secondary" onClick={onClose}>Annulla</Button>
           <Button type="submit">Aggiorna</Button>
         </div>

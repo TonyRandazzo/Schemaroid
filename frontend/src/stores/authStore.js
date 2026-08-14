@@ -23,6 +23,11 @@ export const useAuthStore = create(
         set({ user: res.data.user, token: res.data.token, isGuest: true });
         return res.data;
       },
+      loginAsGuest: async () => {
+        const guestId = localStorage.getItem('guestId') || crypto.randomUUID();
+        localStorage.setItem('guestId', guestId);
+        return get().guestLogin(guestId);
+      },
       logout: () => set({ user: null, token: null, isGuest: false }),
       updateProfile: async (data) => {
         const res = await api.put('/auth/profile', data);

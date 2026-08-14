@@ -1,53 +1,96 @@
-import { Handle, Position } from 'reactflow';
+import { useState } from 'react';
+import { Handle, Position, NodeResizer, useStore } from 'reactflow';
 import { useSchemaStore } from '../../stores/schemaStore';
+import { useThemeStore } from '../../stores/themeStore';
 
-const SIZES = {
-  rectangle: { w: 150, h: 80 },
-  square:    { w: 100, h: 100 },
-  circle:    { w: 100, h: 100 },
-  diamond:   { w: 130, h: 130 },
-  triangle:  { w: 130, h: 110 },
+export const DEFAULT_SIZES = {
+  rectangle: { w: 180, h: 90 },
+  square:    { w: 110, h: 110 },
+  circle:    { w: 110, h: 110 },
+  diamond:   { w: 140, h: 140 },
+  triangle:  { w: 140, h: 120 },
 };
 
-// Padding (top right bottom left) to keep text inside each shape
+const MIN_SIZES = {
+  rectangle: { w: 90,  h: 52 },
+  square:    { w: 60,  h: 60 },
+  circle:    { w: 60,  h: 60 },
+  diamond:   { w: 80,  h: 80 },
+  triangle:  { w: 80,  h: 70 },
+};
+
+const LOCKED_RATIO = new Set(['circle', 'square']);
+
 const TEXT_PAD = {
-  rectangle: '8px 14px',
-  square:    '14px',
-  circle:    '22px',
-  diamond:   '38px 36px',
-  triangle:  '58px 22px 8px',
+  rectangle: '8px 12px',
+  square:    '12px',
+  circle:    '16%',
+  diamond:   '22%',
+  triangle:  '42% 16% 8%',
 };
 
-function getBorderColor(hyperlink) {
-  if (!hyperlink) return '#1e293b';
-  return hyperlink.startsWith('schema:') ? '#f97316' : '#2563eb';
+export const DEFAULT_SHAPE_COLOR = '#343A52';
+export const DEFAULT_TEXT_COLOR = '#F5F5F5';
+
+function getBorderColor(hyperlink, isDark) {
+  if (!hyperlink) return isDark ? '#AEB5C7' : '#2A2F3E';
+  return hyperlink.startsWith('schema:') ? '#F0A500' : '#EE2B48';
 }
 
 function ShapeSVG({ type, w, h, fill, stroke }) {
-  const sw = 3, hs = sw / 2;
+  const sw = 2.5, hs = sw / 2;
+  if (!w || !h) return null;
+
   if (type === 'circle') {
-    const r = Math.min(w, h) / 2 - hs;
-    return <svg width={w} height={h}><circle cx={w/2} cy={h/2} r={r} fill={fill} stroke={stroke} strokeWidth={sw} /></svg>;
+    return (
+      <svg width={w} height={h}>
+        <ellipse cx={w / 2} cy={h / 2} rx={w / 2 - hs} ry={h / 2 - hs} fill={fill} stroke={stroke} strokeWidth={sw} />
+      </svg>
+    );
   }
   if (type === 'diamond') {
-    const pts = `${w/2},${hs} ${w-hs},${h/2} ${w/2},${h-hs} ${hs},${h/2}`;
-    return <svg width={w} height={h}><polygon points={pts} fill={fill} stroke={stroke} strokeWidth={sw} /></svg>;
+    const pts = `${w / 2},${hs} ${w - hs},${h / 2} ${w / 2},${h - hs} ${hs},${h / 2}`;
+    return <svg width={w} height={h}><polygon points={pts} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" /></svg>;
   }
   if (type === 'triangle') {
-    const pts = `${w/2},${hs} ${w-hs},${h-hs} ${hs},${h-hs}`;
-    return <svg width={w} height={h}><polygon points={pts} fill={fill} stroke={stroke} strokeWidth={sw} /></svg>;
+    const pts = `${w / 2},${hs} ${w - hs},${h - hs} ${hs},${h - hs}`;
+    return <svg width={w} height={h}><polygon points={pts} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" /></svg>;
   }
-  const rx = type === 'square' ? 2 : 8;
-  return <svg width={w} height={h}><rect x={hs} y={hs} width={w-sw} height={h-sw} rx={rx} fill={fill} stroke={stroke} strokeWidth={sw} /></svg>;
+  const rx = type === 'square' ? 4 : 10;
+  return (
+    <svg width={w} height={h}>
+      <rect x={hs} y={hs} width={w - sw} height={h - sw} rx={rx} fill={fill} stroke={stroke} strokeWidth={sw} />
+    </svg>
+  );
 }
 
-export default function ShapeNode({ data, id }) {
-  const { title, description, color, image_url, hyperlink, onEdit, shape_type } = data;
+const PINS = [
+  { id: 'top',    position: Position.Top },
+  { id: 'right',  position: Position.Right },
+  { id: 'bottom', position: Position.Bottom },
+  { id: 'left',   position: Position.Left },
+];
+
+export default function ShapeNode({ data, id, selected }) {
+  const { title, description, color, text_color, image_url, hyperlink, onEdit, shape_type } = data;
   const { schemas, setCurrentSchema } = useSchemaStore();
+  const isDark = useThemeStore((s) => s.theme === 'dark');
+  const [hovered, setHovered] = useState(false);
 
   const type = shape_type || 'rectangle';
-  const { w, h } = SIZES[type] || SIZES.rectangle;
-  const borderColor = getBorderColor(hyperlink);
+  const min = MIN_SIZES[type] || MIN_SIZES.rectangle;
+
+  const { w, h } = useStore(
+    (s) => {
+      const n = s.nodeInternals.get(id);
+      const fallback = DEFAULT_SIZES[type] || DEFAULT_SIZES.rectangle;
+      return { w: n?.width ?? fallback.w, h: n?.height ?? fallback.h };
+    },
+    (a, b) => a.w === b.w && a.h === b.h
+  );
+
+  const borderColor = getBorderColor(hyperlink, isDark);
+  const fg = text_color || DEFAULT_TEXT_COLOR;
 
   const isSchemaLink = hyperlink?.startsWith('schema:');
   const linkedSchemaId = isSchemaLink ? hyperlink.replace('schema:', '') : null;
@@ -61,15 +104,29 @@ export default function ShapeNode({ data, id }) {
   };
 
   return (
-    <div style={{ position: 'relative', width: w, height: h }}>
-      <Handle type="target" position={Position.Top} className="w-3 h-3" />
+    <div
+      className="group"
+      style={{ position: 'relative', width: '100%', height: '100%' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      pe-resize-handle"
+      />
 
-      {/* SVG shape */}
+      {PINS.map(({ id: pinId, position }) => (
+        <Handle
+          key={pinId}
+          id={pinId}
+          type="source"
+          position={position}
+          className="shape-pin"
+        />
+      ))}
+
       <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        <ShapeSVG type={type} w={w} h={h} fill={color || '#3B82F6'} stroke={borderColor} />
+        <ShapeSVG type={type} w={w} h={h} fill={color || DEFAULT_SHAPE_COLOR} stroke={borderColor} />
       </div>
 
-      {/* Content overlay */}
       <div
         style={{
           position: 'absolute', inset: 0,
@@ -81,15 +138,15 @@ export default function ShapeNode({ data, id }) {
         }}
       >
         {image_url && (
-          <img src={image_url} alt="" style={{ width: '100%', height: 28, objectFit: 'cover', borderRadius: 3, marginBottom: 2 }} />
+          <img src={image_url} alt="" style={{ width: '100%', height: 28, objectFit: 'cover', borderRadius: 3, marginBottom: 3 }} />
         )}
         {title && (
-          <div style={{ fontWeight: 700, color: '#fff', fontSize: 12, textAlign: 'center', lineHeight: 1.2 }}>
+          <div style={{ fontWeight: 700, color: fg, fontSize: 12, textAlign: 'center', lineHeight: 1.2 }}>
             {title}
           </div>
         )}
         {description && (
-          <div style={{ color: '#fff', opacity: 0.85, fontSize: 10, textAlign: 'center', marginTop: 2 }}>
+          <div style={{ color: fg, opacity: 0.85, fontSize: 10, textAlign: 'center', marginTop: 2 }}>
             {description}
           </div>
         )}
@@ -99,7 +156,10 @@ export default function ShapeNode({ data, id }) {
             target={isSchemaLink ? undefined : '_blank'}
             rel="noopener noreferrer"
             onClick={handleLinkClick}
-            style={{ pointerEvents: 'auto', color: '#bfdbfe', fontSize: 10, textDecoration: 'underline', marginTop: 2, display: 'block', textAlign: 'center' }}
+            style={{
+              pointerEvents: 'auto', color: fg, opacity: 0.9, fontSize: 10,
+              textDecoration: 'underline', marginTop: 2, textAlign: 'center',
+            }}
           >
             {isSchemaLink ? (linkedSchema?.name || 'Schema') : 'Link'}
           </a>
@@ -110,20 +170,19 @@ export default function ShapeNode({ data, id }) {
             pointerEvents: 'auto',
             marginTop: 4,
             fontSize: 10,
-            background: 'rgba(255,255,255,0.28)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 4,
+            background: 'rgba(255,255,255,0.25)',
+            color: fg,
+            border: '1px solid rgba(255,255,255,0.35)',
+            borderRadius: 5,
             padding: '2px 8px',
             cursor: 'pointer',
+            backdropFilter: 'blur(2px)',
           }}
           onClick={() => onEdit(id)}
         >
           Modifica
         </button>
       </div>
-
-      <Handle type="source" position={Position.Bottom} className="w-3 h-3" />
     </div>
   );
 }

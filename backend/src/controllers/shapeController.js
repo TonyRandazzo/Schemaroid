@@ -1,4 +1,5 @@
 import supabase from '../models/db.js';
+import { writeTolerant } from '../models/schemaCompat.js';
 
 export const getShapes = async (req, res) => {
   const { schemaId } = req.params;
@@ -12,24 +13,28 @@ export const getShapes = async (req, res) => {
 };
 
 export const createShape = async (req, res) => {
-  const { schemaId, title, description, color, x, y, width, height, hyperlink, image_url, shape_type } = req.body;
+  const { schemaId, title, description, color, text_color, x, y, width, height, hyperlink, image_url, shape_type } = req.body;
   const { data: schema } = await supabase.from('schemas').select('project_id').eq('id', schemaId).single();
   if (!schema) return res.status(404).json({ error: 'Schema not found' });
   const { data: project } = await supabase.from('projects').select('user_id').eq('id', schema.project_id).single();
   if (!project || project.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-  const { data, error } = await supabase.from('shapes').insert({
-    schema_id: schemaId,
-    title,
-    description,
-    color: color || '#3B82F6',
-    x,
-    y,
-    width: width || 150,
-    height: height || 100,
-    hyperlink,
-    image_url,
-    shape_type: shape_type || 'rectangle'
-  }).select();
+  const { data, error } = await writeTolerant(
+    (payload) => supabase.from('shapes').insert(payload).select(),
+    {
+      schema_id: schemaId,
+      title,
+      description,
+      color: color || '#343A52',
+      text_color: text_color || '#F5F5F5',
+      x,
+      y,
+      width: width || 150,
+      height: height || 100,
+      hyperlink,
+      image_url,
+      shape_type: shape_type || 'rectangle'
+    }
+  );
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json(data[0]);
 };
@@ -42,13 +47,16 @@ export const updateShape = async (req, res) => {
   const { data: project } = await supabase.from('projects').select('user_id').eq('id', schema.project_id).single();
   if (!project || project.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
 
-  const { title, description, color, x, y, width, height, hyperlink, image_url, shape_type } = req.body;
+  const { title, description, color, text_color, x, y, width, height, hyperlink, image_url, shape_type } = req.body;
   const updates = Object.fromEntries(
-    Object.entries({ title, description, color, x, y, width, height, hyperlink, image_url, shape_type })
+    Object.entries({ title, description, color, text_color, x, y, width, height, hyperlink, image_url, shape_type })
       .filter(([, v]) => v !== undefined)
   );
 
-  const { data, error } = await supabase.from('shapes').update(updates).eq('id', id).select();
+  const { data, error } = await writeTolerant(
+    (payload) => supabase.from('shapes').update(payload).eq('id', id).select(),
+    updates
+  );
   if (error) return res.status(500).json({ error: error.message });
   res.json(data[0]);
 };

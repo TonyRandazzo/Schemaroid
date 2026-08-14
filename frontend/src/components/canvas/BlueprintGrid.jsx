@@ -1,17 +1,19 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import ReactFlow, {
   useNodesState, useEdgesState, Background, BackgroundVariant, Controls,
-  ReactFlowProvider, useReactFlow,
+  ReactFlowProvider, useReactFlow, ConnectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { useShapeStore } from '../../stores/shapeStore';
 import { useSchemaStore } from '../../stores/schemaStore';
-import ShapeNode from './ShapeNode';
+import { useThemeStore } from '../../stores/themeStore';
+import ShapeNode, { DEFAULT_SIZES } from './ShapeNode';
 import DraftNode from './DraftNode';
 
 const nodeTypes = { shapeNode: ShapeNode, draftNode: DraftNode };
 
-/* ─── Context menu ─────────────────────────────────────────── */
+const OPPOSITE_HANDLE = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
+
 function ContextMenu({ menu, onClose, onAddShape, onModifica, onCopy, onCut, onPaste, onDelete, clipboardCount }) {
   if (!menu) return null;
 
@@ -20,14 +22,15 @@ function ContextMenu({ menu, onClose, onAddShape, onModifica, onCopy, onCut, onP
 
   return (
     <div
-      className="fixed bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-50 min-w-[160px]"
+      className="menu fixed min-w-[180px]"
       style={{ top: menu.sy, left: menu.sx }}
       onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
     >
       {isPane ? (
         <>
-          <MenuItem onClick={() => { onAddShape(menu.flowPos); onClose(); }}>
-            + Aggiungi forma qui
+          <MenuItem onClick={() => { onAddShape(menu.flowPos, menu.connectFrom); onClose(); }}>
+            {menu.connectFrom ? '+ Aggiungi forma e collega' : '+ Aggiungi forma qui'}
           </MenuItem>
           {clipboardCount > 0 && (
             <MenuItem onClick={() => { onPaste(menu.flowPos); onClose(); }}>
@@ -64,7 +67,7 @@ function ContextMenu({ menu, onClose, onAddShape, onModifica, onCopy, onCut, onP
 function MenuItem({ children, onClick, danger }) {
   return (
     <button
-      className={`block w-full text-left px-4 py-2 text-sm hover:bg-gray-50 ${danger ? 'text-red-600' : 'text-gray-700'}`}
+      className={`menu-item ${danger ? 'menu-item-danger' : ''}`}
       onClick={onClick}
     >
       {children}
@@ -73,14 +76,15 @@ function MenuItem({ children, onClick, danger }) {
 }
 
 function Divider() {
-  return <hr className="my-1 border-gray-100" />;
+  return <div className="my-1.5 h-px bg-line" />;
 }
 
-/* ─── Inner component (needs ReactFlow context) ─────────────── */
 function BlueprintGridInner({ addShapeTrigger }) {
   const { shapes, connections, fetchShapes, addConnection, updateShape, addShape, deleteShape } = useShapeStore();
+  const loadingSchemaId = useShapeStore((s) => s.loadingSchemaId);
   const { currentSchemaId } = useSchemaStore();
-  const { screenToFlowPosition, getNode } = useReactFlow();
+  const theme = useThemeStore((s) => s.theme);
+  const { screenToFlowPosition, getNode, fitView } = useReactFlow();
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -103,7 +107,6 @@ function BlueprintGridInner({ addShapeTrigger }) {
     setClipboardState(items);
   }, []);
 
-  /* ─── Draft node management ─────────────────────────────────── */
 
   const removeDraft = useCallback(() => {
     draftActiveRef.current = false;
@@ -114,7 +117,7 @@ function BlueprintGridInner({ addShapeTrigger }) {
   const removeDraftRef = useRef(removeDraft);
   useEffect(() => { removeDraftRef.current = removeDraft; }, [removeDraft]);
 
-  const spawnDraft = useCallback((pos, initialData, shapeId) => {
+  const spawnDraft = useCallback((pos, initialData, shapeId, connectFrom = null) => {
     if (draftActiveRef.current) return;
     draftActiveRef.current = true;
     draftCounterRef.current += 1;
@@ -137,7 +140,26 @@ function BlueprintGridInner({ addShapeTrigger }) {
           if (shapeId) {
             await updateShape(shapeId, { ...formData, x: currentPos.x, y: currentPos.y });
           } else {
-            await addShape({ ...formData, x: currentPos.x, y: currentPos.y, schemaId: currentSchemaIdRef.current });
+            const size = DEFAULT_SIZES[formData.shape_type] || DEFAULT_SIZES.rectangle;
+            const created = await addShape({
+              ...formData,
+              x: currentPos.x, y: currentPos.y,
+              width: size.w, height: size.h,
+              schemaId: currentSchemaIdRef.current,
+            });
+
+            if (connectFrom && created?.id) {
+              await addConnection(
+                connectFrom.nodeId,
+                String(created.id),
+                currentSchemaIdRef.current,
+                undefined,
+                {
+                  source_handle: connectFrom.handleId,
+                  target_handle: OPPOSITE_HANDLE[connectFrom.handleId] ?? null,
+                }
+              );
+            }
           }
         },
         onCancel: () => removeDraftRef.current(),
@@ -145,12 +167,27 @@ function BlueprintGridInner({ addShapeTrigger }) {
     };
 
     setNodes(prev => [...prev.filter(n => !n.id.startsWith('__draft')), draftNode]);
-  }, [getNode, updateShape, addShape]);
+
+    let attempts = 0;
+    const frame = () => {
+      const node = getNode(draftId);
+      if (node?.width && node?.height) {
+        fitView({
+          nodes: [{ id: draftId }],
+          padding: 0.25,
+          duration: 400,
+          maxZoom: 1,
+        });
+      } else if (attempts++ < 10) {
+        setTimeout(frame, 30);
+      }
+    };
+    setTimeout(frame, 0);
+  }, [getNode, fitView, updateShape, addShape, addConnection]);
 
   const spawnDraftRef = useRef(spawnDraft);
   useEffect(() => { spawnDraftRef.current = spawnDraft; }, [spawnDraft]);
 
-  /* ─── Clipboard operations ──────────────────────────────────── */
 
   const handleCopy = useCallback((ids) => {
     const items = shapesRef.current.filter(s => ids.includes(String(s.id)));
@@ -170,15 +207,31 @@ function BlueprintGridInner({ addShapeTrigger }) {
   const handlePaste = useCallback(async (pastePos) => {
     const items = clipboardRef.current;
     if (!items.length) return;
+
+    const clone = (s, x, y) => ({
+      title: s.title,
+      description: s.description,
+      color: s.color,
+      text_color: s.text_color,
+      shape_type: s.shape_type,
+      hyperlink: s.hyperlink,
+      image_url: s.image_url,
+      width: s.width,
+      height: s.height,
+      x,
+      y,
+      schemaId: currentSchemaIdRef.current,
+    });
+
     if (pastePos) {
       const minX = Math.min(...items.map(s => s.x));
       const minY = Math.min(...items.map(s => s.y));
       for (const s of items) {
-        await addShape({ title: s.title, description: s.description, color: s.color, shape_type: s.shape_type, hyperlink: s.hyperlink, image_url: s.image_url, x: pastePos.x + (s.x - minX), y: pastePos.y + (s.y - minY), schemaId: currentSchemaIdRef.current });
+        await addShape(clone(s, pastePos.x + (s.x - minX), pastePos.y + (s.y - minY)));
       }
     } else {
       for (const s of items) {
-        await addShape({ title: s.title, description: s.description, color: s.color, shape_type: s.shape_type, hyperlink: s.hyperlink, image_url: s.image_url, x: s.x + 30, y: s.y + 30, schemaId: currentSchemaIdRef.current });
+        await addShape(clone(s, s.x + 30, s.y + 30));
       }
     }
   }, [addShape]);
@@ -188,7 +241,6 @@ function BlueprintGridInner({ addShapeTrigger }) {
     if (shape) spawnDraftRef.current({ x: shape.x ?? 100, y: shape.y ?? 100 }, shape, shape.id);
   }, []);
 
-  /* ─── Refs for keyboard handler (avoid stale closures) ──────── */
   const handleCopyRef = useRef(handleCopy);
   const handleCutRef = useRef(handleCut);
   const handlePasteRef = useRef(handlePaste);
@@ -198,9 +250,9 @@ function BlueprintGridInner({ addShapeTrigger }) {
   useEffect(() => { handlePasteRef.current = handlePaste; }, [handlePaste]);
   useEffect(() => { handleDeleteRef.current = handleDelete; }, [handleDelete]);
 
-  /* ─── Keyboard shortcuts (registered once) ───────────────────── */
   useEffect(() => {
     const onKey = (e) => {
+      if (document.querySelector('[role="dialog"]')) return;
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       const meta = e.ctrlKey || e.metaKey;
@@ -222,16 +274,14 @@ function BlueprintGridInner({ addShapeTrigger }) {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []); // stable — uses refs
+  }, []);
 
-  /* ─── Header button trigger ──────────────────────────────────── */
   const addShapeTriggerRef = useRef(addShapeTrigger);
   useEffect(() => {
     if (!addShapeTrigger) return;
     spawnDraftRef.current({ x: 60, y: 60 }, null, null);
   }, [addShapeTrigger]);
 
-  /* ─── Sync shapes from store ─────────────────────────────────── */
   useEffect(() => {
     if (currentSchemaId) fetchShapes(currentSchemaId);
   }, [currentSchemaId]);
@@ -241,18 +291,22 @@ function BlueprintGridInner({ addShapeTrigger }) {
       const draft = prev.find(n => n.id.startsWith('__draft'));
       const shapeNodes = shapes
         .filter(s => String(s.id) !== editingShapeId)
-        .map(s => ({
-          id: String(s.id),
-          type: 'shapeNode',
-          position: { x: s.x ?? 100, y: s.y ?? 100 },
-          data: {
-            ...s,
-            onEdit: (nodeId) => {
-              const shape = shapesRef.current.find(sh => String(sh.id) === nodeId);
-              if (shape) spawnDraftRef.current({ x: shape.x ?? 100, y: shape.y ?? 100 }, shape, shape.id);
+        .map(s => {
+          const fallback = DEFAULT_SIZES[s.shape_type] || DEFAULT_SIZES.rectangle;
+          return {
+            id: String(s.id),
+            type: 'shapeNode',
+            position: { x: s.x ?? 100, y: s.y ?? 100 },
+            style: { width: s.width ?? fallback.w, height: s.height ?? fallback.h },
+            data: {
+              ...s,
+              onEdit: (nodeId) => {
+                const shape = shapesRef.current.find(sh => String(sh.id) === nodeId);
+                if (shape) spawnDraftRef.current({ x: shape.x ?? 100, y: shape.y ?? 100 }, shape, shape.id);
+              },
             },
-          },
-        }));
+          };
+        });
       return draft ? [...shapeNodes, draft] : shapeNodes;
     });
   }, [shapes, editingShapeId]);
@@ -262,19 +316,64 @@ function BlueprintGridInner({ addShapeTrigger }) {
       id: String(c.id),
       source: String(c.source_shape_id),
       target: String(c.target_shape_id),
+      sourceHandle: c.source_handle ?? null,
+      targetHandle: c.target_handle ?? null,
       label: c.label,
     })));
   }, [connections]);
 
-  /* ─── ReactFlow handlers ─────────────────────────────────────── */
   const onConnect = useCallback((params) => {
-    addConnection(params.source, params.target, currentSchemaId);
+    addConnection(
+      params.source,
+      params.target,
+      currentSchemaId,
+      undefined,
+      { source_handle: params.sourceHandle, target_handle: params.targetHandle }
+    );
   }, [addConnection, currentSchemaId]);
+
+  const connectStartRef = useRef(null);
+
+  const onConnectStart = useCallback((_, { nodeId, handleId }) => {
+    connectStartRef.current = nodeId && !nodeId.startsWith('__draft')
+      ? { nodeId, handleId }
+      : null;
+  }, []);
+
+  const onConnectEnd = useCallback((event) => {
+    const from = connectStartRef.current;
+    connectStartRef.current = null;
+
+    const el = event.target;
+    if (!el?.closest || !el.closest('.react-flow') || el.closest('.react-flow__node')) return;
+
+    const point = event.changedTouches?.[0] ?? event;
+    const { clientX, clientY } = point;
+    setMenu({
+      kind: 'pane',
+      sx: clientX,
+      sy: clientY,
+      flowPos: screenToFlowPosition({ x: clientX, y: clientY }),
+      connectFrom: from,
+    });
+  }, [screenToFlowPosition]);
 
   const onNodeDragStop = useCallback((_, node) => {
     if (node.id.startsWith('__draft')) return;
     updateShape(node.id, { x: node.position.x, y: node.position.y });
   }, [updateShape]);
+
+  const onNodesChangeWithPersist = useCallback((changes) => {
+    onNodesChange(changes);
+    for (const ch of changes) {
+      if (ch.type === 'dimensions' && ch.resizing === false && !ch.id.startsWith('__draft')) {
+        const node = getNode(ch.id);
+        if (node?.width && node?.height) {
+          updateShape(ch.id, { width: Math.round(node.width), height: Math.round(node.height) });
+        }
+      }
+    }
+  }, [onNodesChange, getNode, updateShape]);
 
   const onSelectionChange = useCallback(({ nodes: sel }) => {
     selectedNodeIdsRef.current = sel
@@ -301,21 +400,40 @@ function BlueprintGridInner({ addShapeTrigger }) {
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
   }, [menu]);
 
-  /* ─── Render ─────────────────────────────────────────────────── */
   if (!currentSchemaId) {
-    return <div className="p-8 text-gray-500">Seleziona uno schema per iniziare a disegnare</div>;
+    return (
+      <div className="card grid h-[70vh] place-items-center text-center">
+        <div>
+          <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-xl bg-surface-sunken text-fg-subtle">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+              <rect x="3" y="3" width="7" height="7" rx="1.5" />
+              <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              <path strokeLinecap="round" d="M10 6.5h4a1.5 1.5 0 011.5 1.5v6" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-fg">Nessuno schema selezionato</p>
+          <p className="mt-1 text-sm text-fg-muted">Scegli uno schema qui sopra per iniziare a disegnare</p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div style={{ height: '70vh' }} className="bg-gray-50 relative">
+    <div style={{ height: '70vh' }} className="card relative overflow-hidden">
+      {loadingSchemaId === currentSchemaId && (
+        <div className="pointer-events-none absolute right-3 top-3 z-20 rounded-full border border-line
+          bg-surface/90 px-3 py-1 text-xs text-fg-muted shadow-sm">
+          Caricamento…
+        </div>
+      )}
       <ContextMenu
         menu={menu}
         onClose={closeMenu}
-        onAddShape={(pos) => spawnDraft(pos, null, null)}
+        onAddShape={(pos, connectFrom) => spawnDraft(pos, null, null, connectFrom)}
         onModifica={handleModifica}
         onCopy={handleCopy}
         onCut={handleCut}
@@ -326,21 +444,27 @@ function BlueprintGridInner({ addShapeTrigger }) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={onNodesChangeWithPersist}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onConnectStart={onConnectStart}
+        onConnectEnd={onConnectEnd}
+        connectionMode={ConnectionMode.Loose}
         onNodeDragStop={onNodeDragStop}
         onSelectionChange={onSelectionChange}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
-        onPaneClick={closeMenu}
         nodeTypes={nodeTypes}
         deleteKeyCode={null}
         fitView
         proOptions={{ hideAttribution: true }}
-        className="bg-white"
+        className="bg-surface"
       >
-        <Background variant={BackgroundVariant.Lines} gap={24} color="#e5e7eb" />
+        <Background
+          variant={BackgroundVariant.Lines}
+          gap={24}
+          color={theme === 'dark' ? 'rgb(51 65 85 / 0.5)' : 'rgb(226 232 240 / 0.9)'}
+        />
         <Controls />
       </ReactFlow>
     </div>
