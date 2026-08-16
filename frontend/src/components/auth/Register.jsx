@@ -11,6 +11,7 @@ export default function Register() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [accepted, setAccepted] = useState(false);
   const { register, loginAsGuest } = useAuthStore();
   const navigate = useNavigate();
 
@@ -55,7 +56,25 @@ export default function Register() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} required />
               <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-              <Button type="submit" className="w-full" disabled={busy}>
+
+              <label className="flex items-start gap-2.5 text-sm text-fg-muted">
+                <input
+                  type="checkbox"
+                  required
+                  checked={accepted}
+                  onChange={(e) => setAccepted(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-[rgb(var(--accent))]"
+                />
+                <span>
+                  Ho letto l&apos;
+                  <Link to="/privacy" className="font-medium text-accent hover:underline">
+                    informativa sulla privacy
+                  </Link>
+                  .
+                </span>
+              </label>
+
+              <Button type="submit" className="w-full" disabled={busy || !accepted}>
                 {busy ? 'Attendere…' : 'Registrati'}
               </Button>
             </form>
@@ -70,7 +89,8 @@ export default function Register() {
               Continua come ospite
             </Button>
             <p className="mt-2 text-center text-xs text-fg-subtle">
-              I progetti resteranno legati a questo browser.
+              I progetti resteranno legati a questo browser. Proseguendo accetti l&apos;
+              <Link to="/privacy" className="underline hover:text-fg-muted">informativa sulla privacy</Link>.
             </p>
           </div>
 

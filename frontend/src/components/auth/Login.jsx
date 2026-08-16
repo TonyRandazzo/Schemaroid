@@ -77,6 +77,13 @@ export default function Login() {
               Registrati
             </Link>
           </p>
+          <p className="mt-3 text-center text-xs text-white/50">
+            Accedendo accetti l&apos;
+            <Link to="/privacy" className="underline underline-offset-4 hover:text-white/80">
+              informativa sulla privacy
+            </Link>
+            .
+          </p>
         </div>
       </div>
     </div>

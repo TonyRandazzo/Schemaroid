@@ -28,7 +28,7 @@ const shapeOptionalFields = [
   body('height').optional().isFloat(),
   body('hyperlink').optional({ checkFalsy: true }).isLength({ max: 500 }),
   body('image_url').optional({ checkFalsy: true }).isURL(),
-  body('shape_type').optional().isIn(['rectangle', 'square', 'circle', 'diamond', 'triangle']),
+  body('shape_type').optional().isIn(['rectangle', 'square', 'circle', 'diamond', 'triangle', 'comment']),
 ];
 
 export const shapeCreateValidators = [

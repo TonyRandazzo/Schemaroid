@@ -3,6 +3,7 @@ import { useAuthStore } from './stores/authStore';
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
 import Dashboard from './components/Dashboard';
+import PrivacyPolicy from './components/legal/PrivacyPolicy';
 
 function App() {
   const { user } = useAuthStore();
@@ -11,6 +12,7 @@ function App() {
       <Routes>
         <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
         <Route path="/register" element={!user ? <Register /> : <Navigate to="/" />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/" element={user ? <Dashboard /> : <Navigate to="/login" />} />
       </Routes>
     </BrowserRouter>

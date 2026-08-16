@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -69,6 +70,14 @@ export default function ProfileDropdown() {
               Logout
             </Button>
           </div>
+
+          <div className="my-1.5 h-px bg-line" />
+          <Link
+            to="/privacy"
+            className="block px-2.5 py-1 text-xs text-fg-subtle transition-colors hover:text-fg"
+          >
+            Informativa sulla privacy
+          </Link>
         </div>
       )}
 

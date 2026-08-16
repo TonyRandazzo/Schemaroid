@@ -279,6 +279,29 @@
 .react-flow__resize-control {
   z-index: 4;
 }
+
+.comment-resize-line,
+.comment-resize-handle {
+  pointer-events: all;
+}
+.comment-resize-line {
+  border-color: rgb(var(--accent));
+  border-width: 1.5px;
+  padding: 3px;
+}
+.comment-resize-handle {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: #fff;
+  border: 1.5px solid rgb(var(--accent));
+  box-shadow: 0 1px 3px rgb(var(--shadow-color) / 0.35);
+}
+
+.react-flow__selection {
+  background: rgb(var(--accent) / 0.12);
+  border: 1px solid rgb(var(--accent));
+}
 .shape-pin {
   z-index: 6;
 }
