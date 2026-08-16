@@ -71,6 +71,16 @@ redirect SPA). Non serve compilare i campi a mano.
 Il suffisso `/api` viene aggiunto automaticamente se assente, quindi entrambe
 le forme funzionano.
 
+Vite **sostituisce questa variabile dentro il bundle durante la build**, non la
+legge quando il sito è in esecuzione. Di conseguenza: va impostata *prima* del
+deploy, e cambiarla richiede una nuova build (su Netlify: *Trigger deploy →
+Clear cache and deploy site*).
+
+Se manca, la build si interrompe con un messaggio esplicativo invece di
+pubblicare un sito che non riesce a raggiungere il backend. Per un'installazione
+in cui frontend e backend condividono il dominio, impostare esplicitamente
+`VITE_API_URL=/api`.
+
 Le variabili `VITE_*` finiscono **nel bundle scaricato dal browser**: non vanno
 mai usate per chiavi segrete.
 
