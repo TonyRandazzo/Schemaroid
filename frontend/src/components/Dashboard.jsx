@@ -8,6 +8,7 @@ import GuestBanner from './auth/GuestBanner';
 import ThemeToggle from './ui/ThemeToggle';
 import Button from './ui/Button';
 import ConfirmDialog from './ui/ConfirmDialog';
+import ExportMenu from './export/ExportMenu';
 import { useProjectStore } from '../stores/projectStore';
 import { useSchemaStore } from '../stores/schemaStore';
 
@@ -117,6 +118,7 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-2.5">
+            <ExportMenu />
             <Button size="sm" onClick={() => setAddShapeTrigger(t => t + 1)}>
               + Aggiungi forma
             </Button>

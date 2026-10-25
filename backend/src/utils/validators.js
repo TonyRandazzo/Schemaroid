@@ -21,7 +21,7 @@ export const schemaUpdateValidators = [
 
 const shapeOptionalFields = [
   body('title').optional().isLength({ max: 200 }),
-  body('description').optional().isLength({ max: 500 }),
+  body('description').optional({ nullable: true }).isString(),
   body('color').optional().matches(/^#[0-9a-f]{6}$/i),
   body('text_color').optional().matches(/^#[0-9a-f]{6}$/i),
   body('width').optional().isFloat(),

@@ -7,12 +7,14 @@ import 'reactflow/dist/style.css';
 import { useShapeStore } from '../../stores/shapeStore';
 import { useSchemaStore } from '../../stores/schemaStore';
 import { useThemeStore } from '../../stores/themeStore';
+import { useHistoryStore, pickFields } from '../../stores/historyStore';
 import ShapeNode, { DEFAULT_SIZES } from './ShapeNode';
 import DraftNode from './DraftNode';
 import CommentNode, {
   COMMENT_TYPE, COMMENT_DEFAULT_COLOR, COMMENT_HEADER_H, COMMENT_PADDING, COMMENT_MIN, isComment,
 } from './CommentNode';
 import { nodeRect, contains, commentBoxFor } from './geometry';
+import { fitShapeSize, shapeContent } from './shapeLayout';
 
 const nodeTypes = { shapeNode: ShapeNode, draftNode: DraftNode, commentNode: CommentNode };
 
@@ -20,9 +22,20 @@ const OPPOSITE_HANDLE = { top: 'bottom', bottom: 'top', left: 'right', right: 'l
 
 const isDraft = (id) => String(id).startsWith('__draft');
 
+function fittedSize(type, shape, size) {
+  const content = shapeContent(shape, useSchemaStore.getState().schemas);
+  return fitShapeSize(type || 'rectangle', content, size) ?? size;
+}
+
+function storedSize(shape) {
+  if (isComment(shape)) return { width: shape.width ?? 360, height: shape.height ?? 220 };
+  const fallback = DEFAULT_SIZES[shape.shape_type] || DEFAULT_SIZES.rectangle;
+  return { width: shape.width ?? fallback.w, height: shape.height ?? fallback.h };
+}
+
 function ContextMenu({
   menu, onClose, onAddShape, onModifica, onCopy, onCut, onPaste, onDelete,
-  onGroup, onSelectAll, clipboardCount,
+  onGroup, onSelectAll, onUndo, onRedo, canUndo, canRedo, clipboardCount,
 }) {
   if (!menu) return null;
 
@@ -45,6 +58,17 @@ function ContextMenu({
           {clipboardCount > 0 && (
             <MenuItem onClick={() => { onPaste(menu.flowPos); onClose(); }}>
               Incolla ({clipboardCount})
+            </MenuItem>
+          )}
+          {(canUndo || canRedo) && <Divider />}
+          {canUndo && (
+            <MenuItem onClick={() => { onUndo(); onClose(); }}>
+              Annulla <Hint>Ctrl+Z</Hint>
+            </MenuItem>
+          )}
+          {canRedo && (
+            <MenuItem onClick={() => { onRedo(); onClose(); }}>
+              Ripeti <Hint>Ctrl+Y</Hint>
             </MenuItem>
           )}
           <Divider />
@@ -107,6 +131,11 @@ function BlueprintGridInner({ addShapeTrigger }) {
   const { currentSchemaId } = useSchemaStore();
   const theme = useThemeStore((s) => s.theme);
   const { screenToFlowPosition, getNode, getNodes, fitView } = useReactFlow();
+  const record = useHistoryStore((s) => s.record);
+  const undo = useHistoryStore((s) => s.undo);
+  const redo = useHistoryStore((s) => s.redo);
+  const canUndo = useHistoryStore((s) => !!s.stacks[currentSchemaId]?.undo.length);
+  const canRedo = useHistoryStore((s) => !!s.stacks[currentSchemaId]?.redo.length);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -160,9 +189,30 @@ function BlueprintGridInner({ addShapeTrigger }) {
           const currentPos = getNode(draftId)?.position ?? pos;
           removeDraftRef.current();
           if (shapeId) {
-            await updateShape(shapeId, { ...formData, x: currentPos.x, y: currentPos.y });
+            const existing = shapesRef.current.find(s => String(s.id) === String(shapeId));
+            const fallback = DEFAULT_SIZES[formData.shape_type] || DEFAULT_SIZES.rectangle;
+            const size = fittedSize(formData.shape_type, formData, {
+              w: existing?.width ?? fallback.w,
+              h: existing?.height ?? fallback.h,
+            });
+            const after = {
+              ...formData,
+              x: currentPos.x, y: currentPos.y,
+              width: size.w, height: size.h,
+            };
+            if (existing) {
+              record(currentSchemaIdRef.current, {
+                kind: 'update',
+                changes: [{ id: shapeId, before: pickFields({ ...existing, ...storedSize(existing) }), after }],
+              });
+            }
+            await updateShape(shapeId, after);
           } else {
-            const size = DEFAULT_SIZES[formData.shape_type] || DEFAULT_SIZES.rectangle;
+            const size = fittedSize(
+              formData.shape_type,
+              formData,
+              DEFAULT_SIZES[formData.shape_type] || DEFAULT_SIZES.rectangle
+            );
             const created = await addShape({
               ...formData,
               x: currentPos.x, y: currentPos.y,
@@ -170,8 +220,9 @@ function BlueprintGridInner({ addShapeTrigger }) {
               schemaId: currentSchemaIdRef.current,
             });
 
+            let connection = null;
             if (connectFrom && created?.id) {
-              await addConnection(
+              connection = await addConnection(
                 connectFrom.nodeId,
                 String(created.id),
                 currentSchemaIdRef.current,
@@ -181,6 +232,13 @@ function BlueprintGridInner({ addShapeTrigger }) {
                   target_handle: OPPOSITE_HANDLE[connectFrom.handleId] ?? null,
                 }
               );
+            }
+            if (created?.id) {
+              record(currentSchemaIdRef.current, {
+                kind: 'create',
+                shapes: [created],
+                connections: connection ? [connection] : [],
+              });
             }
           }
         },
@@ -205,7 +263,7 @@ function BlueprintGridInner({ addShapeTrigger }) {
       }
     };
     setTimeout(frame, 0);
-  }, [getNode, fitView, updateShape, addShape, addConnection]);
+  }, [getNode, fitView, updateShape, addShape, addConnection, record]);
 
   const spawnDraftRef = useRef(spawnDraft);
   useEffect(() => { spawnDraftRef.current = spawnDraft; }, [spawnDraft]);
@@ -216,10 +274,18 @@ function BlueprintGridInner({ addShapeTrigger }) {
     updateClipboard(items);
   }, [updateClipboard]);
 
-  const handleDelete = useCallback((ids) => {
-    const valid = ids.filter(id => !id.startsWith('__draft'));
-    Promise.all(valid.map(id => deleteShape(id)));
-  }, [deleteShape]);
+  const handleDelete = useCallback(async (ids) => {
+    const valid = new Set(ids.filter(id => !id.startsWith('__draft')));
+    const { shapes: current, connections: currentConnections } = useShapeStore.getState();
+    const removed = current.filter(s => valid.has(String(s.id)));
+    const removedConnections = currentConnections.filter(
+      c => valid.has(String(c.source_shape_id)) || valid.has(String(c.target_shape_id))
+    );
+    const schemaId = currentSchemaIdRef.current;
+
+    await Promise.all([...valid].map(id => deleteShape(id)));
+    record(schemaId, { kind: 'delete', shapes: removed, connections: removedConnections });
+  }, [deleteShape, record]);
 
   const handleCut = useCallback((ids) => {
     handleCopy(ids);
@@ -245,18 +311,18 @@ function BlueprintGridInner({ addShapeTrigger }) {
       schemaId: currentSchemaIdRef.current,
     });
 
-    if (pastePos) {
-      const minX = Math.min(...items.map(s => s.x));
-      const minY = Math.min(...items.map(s => s.y));
-      for (const s of items) {
-        await addShape(clone(s, pastePos.x + (s.x - minX), pastePos.y + (s.y - minY)));
-      }
-    } else {
-      for (const s of items) {
-        await addShape(clone(s, s.x + 30, s.y + 30));
-      }
+    const schemaId = currentSchemaIdRef.current;
+    const created = [];
+    const minX = Math.min(...items.map(s => s.x));
+    const minY = Math.min(...items.map(s => s.y));
+    for (const s of items) {
+      const shape = pastePos
+        ? await addShape(clone(s, pastePos.x + (s.x - minX), pastePos.y + (s.y - minY)))
+        : await addShape(clone(s, s.x + 30, s.y + 30));
+      if (shape?.id) created.push(shape);
     }
-  }, [addShape]);
+    record(schemaId, { kind: 'create', shapes: created });
+  }, [addShape, record]);
 
   const handleModifica = useCallback((nodeId) => {
     const shape = shapesRef.current.find(s => String(s.id) === nodeId);
@@ -268,11 +334,20 @@ function BlueprintGridInner({ addShapeTrigger }) {
   }, [setNodes]);
 
   const renameComment = useCallback((id, title) => {
+    const previous = shapesRef.current.find(s => String(s.id) === String(id));
+    record(currentSchemaIdRef.current, {
+      kind: 'update',
+      changes: [{ id, before: { title: previous?.title ?? '' }, after: { title } }],
+    });
     updateShape(id, { title });
-  }, [updateShape]);
+  }, [updateShape, record]);
 
   const renameCommentRef = useRef(renameComment);
   useEffect(() => { renameCommentRef.current = renameComment; }, [renameComment]);
+
+  const handleAutoFit = useCallback((id, size) => {
+    updateShape(id, { width: size.w, height: size.h }).catch(() => {});
+  }, [updateShape]);
 
   const handleGroup = useCallback(async (ids) => {
     const targets = ids
@@ -287,7 +362,8 @@ function BlueprintGridInner({ addShapeTrigger }) {
       min: COMMENT_MIN,
     });
 
-    await addShape({
+    const schemaId = currentSchemaIdRef.current;
+    const created = await addShape({
       shape_type: COMMENT_TYPE,
       title: 'Commento',
       description: '',
@@ -296,20 +372,25 @@ function BlueprintGridInner({ addShapeTrigger }) {
       hyperlink: '',
       image_url: '',
       ...box,
-      schemaId: currentSchemaIdRef.current,
+      schemaId,
     });
-  }, [getNode, addShape]);
+    if (created?.id) record(schemaId, { kind: 'create', shapes: [created] });
+  }, [getNode, addShape, record]);
 
   const handleCopyRef = useRef(handleCopy);
   const handleCutRef = useRef(handleCut);
   const handlePasteRef = useRef(handlePaste);
   const handleDeleteRef = useRef(handleDelete);
   const handleSelectAllRef = useRef(handleSelectAll);
+  const handleUndoRef = useRef(null);
+  const handleRedoRef = useRef(null);
   useEffect(() => { handleCopyRef.current = handleCopy; }, [handleCopy]);
   useEffect(() => { handleCutRef.current = handleCut; }, [handleCut]);
   useEffect(() => { handlePasteRef.current = handlePaste; }, [handlePaste]);
   useEffect(() => { handleDeleteRef.current = handleDelete; }, [handleDelete]);
   useEffect(() => { handleSelectAllRef.current = handleSelectAll; }, [handleSelectAll]);
+  useEffect(() => { handleUndoRef.current = () => undo(currentSchemaId); }, [undo, currentSchemaId]);
+  useEffect(() => { handleRedoRef.current = () => redo(currentSchemaId); }, [redo, currentSchemaId]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -318,8 +399,15 @@ function BlueprintGridInner({ addShapeTrigger }) {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       const meta = e.ctrlKey || e.metaKey;
       const ids = selectedNodeIdsRef.current;
+      const key = e.key.toLowerCase();
 
-      if (meta && (e.key === 'a' || e.key === 'A')) {
+      if (meta && key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndoRef.current?.();
+      } else if (meta && (key === 'y' || (key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedoRef.current?.();
+      } else if (meta && key === 'a') {
         e.preventDefault();
         handleSelectAllRef.current();
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && ids.length) {
@@ -384,6 +472,7 @@ function BlueprintGridInner({ addShapeTrigger }) {
             style: { width: s.width ?? fallback.w, height: s.height ?? fallback.h },
             data: {
               ...s,
+              onAutoFit: handleAutoFit,
               onEdit: (nodeId) => {
                 const shape = shapesRef.current.find(sh => String(sh.id) === nodeId);
                 if (shape) spawnDraftRef.current({ x: shape.x ?? 100, y: shape.y ?? 100 }, shape, shape.id);
@@ -407,15 +496,17 @@ function BlueprintGridInner({ addShapeTrigger }) {
     })));
   }, [connections]);
 
-  const onConnect = useCallback((params) => {
-    addConnection(
+  const onConnect = useCallback(async (params) => {
+    const schemaId = currentSchemaId;
+    const created = await addConnection(
       params.source,
       params.target,
-      currentSchemaId,
+      schemaId,
       undefined,
       { source_handle: params.sourceHandle, target_handle: params.targetHandle }
     );
-  }, [addConnection, currentSchemaId]);
+    if (created?.id) record(schemaId, { kind: 'create', connections: [created] });
+  }, [addConnection, currentSchemaId, record]);
 
   const connectStartRef = useRef(null);
 
@@ -479,11 +570,18 @@ function BlueprintGridInner({ addShapeTrigger }) {
   }, [setNodes]);
 
   const persistPositions = useCallback((movedNodes) => {
+    const changes = [];
     for (const n of movedNodes) {
       if (isDraft(n.id)) continue;
-      updateShape(n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) });
+      const previous = shapesRef.current.find(s => String(s.id) === n.id);
+      const after = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
+      if (previous && (previous.x !== after.x || previous.y !== after.y)) {
+        changes.push({ id: n.id, before: { x: previous.x, y: previous.y }, after });
+      }
+      updateShape(n.id, after);
     }
-  }, [updateShape]);
+    record(currentSchemaIdRef.current, { kind: 'update', changes });
+  }, [updateShape, record]);
 
   const onNodeDragStop = useCallback((_, node, draggedNodes) => {
     const drag = commentDragRef.current;
@@ -512,11 +610,21 @@ function BlueprintGridInner({ addShapeTrigger }) {
       if (ch.type === 'dimensions' && ch.resizing === false && !ch.id.startsWith('__draft')) {
         const node = getNode(ch.id);
         if (node?.width && node?.height) {
-          updateShape(ch.id, { width: Math.round(node.width), height: Math.round(node.height) });
+          let size = { w: Math.round(node.width), h: Math.round(node.height) };
+          if (node.type === 'shapeNode') size = fittedSize(node.data.shape_type, node.data, size);
+          const previous = shapesRef.current.find(s => String(s.id) === ch.id);
+          const after = { width: size.w, height: size.h };
+          if (previous) {
+            const before = storedSize(previous);
+            if (before.width !== after.width || before.height !== after.height) {
+              record(currentSchemaIdRef.current, { kind: 'update', changes: [{ id: ch.id, before, after }] });
+            }
+          }
+          updateShape(ch.id, after);
         }
       }
     }
-  }, [onNodesChange, getNode, updateShape]);
+  }, [onNodesChange, getNode, updateShape, record]);
 
   const onSelectionChange = useCallback(({ nodes: sel }) => {
     selectedNodeIdsRef.current = sel
@@ -591,6 +699,10 @@ function BlueprintGridInner({ addShapeTrigger }) {
         onDelete={handleDelete}
         onGroup={handleGroup}
         onSelectAll={handleSelectAll}
+        onUndo={() => undo(currentSchemaId)}
+        onRedo={() => redo(currentSchemaId)}
+        canUndo={canUndo}
+        canRedo={canRedo}
         clipboardCount={clipboard.length}
       />
       <ReactFlow

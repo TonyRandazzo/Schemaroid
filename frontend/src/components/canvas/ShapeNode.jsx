@@ -1,33 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Handle, Position, NodeResizer, useStore } from 'reactflow';
 import { useSchemaStore } from '../../stores/schemaStore';
 import { useThemeStore } from '../../stores/themeStore';
+import {
+  DEFAULT_SIZES, MIN_SIZES, LOCKED_RATIO, CONTENT_STYLE, IMAGE_STYLE, TITLE_STYLE, DESCRIPTION_STYLE,
+  LINK_STYLE, EDIT_BUTTON_STYLE, textBoxFor, shapeContent, fitShapeSize,
+} from './shapeLayout';
 
-export const DEFAULT_SIZES = {
-  rectangle: { w: 180, h: 90 },
-  square:    { w: 110, h: 110 },
-  circle:    { w: 110, h: 110 },
-  diamond:   { w: 140, h: 140 },
-  triangle:  { w: 140, h: 120 },
-};
-
-const MIN_SIZES = {
-  rectangle: { w: 90,  h: 52 },
-  square:    { w: 60,  h: 60 },
-  circle:    { w: 60,  h: 60 },
-  diamond:   { w: 80,  h: 80 },
-  triangle:  { w: 80,  h: 70 },
-};
-
-const LOCKED_RATIO = new Set(['circle', 'square']);
-
-const TEXT_PAD = {
-  rectangle: '8px 12px',
-  square:    '12px',
-  circle:    '16%',
-  diamond:   '22%',
-  triangle:  '42% 16% 8%',
-};
+export { DEFAULT_SIZES };
 
 export const DEFAULT_SHAPE_COLOR = '#343A52';
 export const DEFAULT_TEXT_COLOR = '#F5F5F5';
@@ -72,23 +52,39 @@ const PINS = [
 ];
 
 export default function ShapeNode({ data, id, selected }) {
-  const { title, description, color, text_color, image_url, hyperlink, onEdit, shape_type } = data;
+  const { title, description, color, text_color, image_url, hyperlink, onEdit, onAutoFit, shape_type } = data;
   const { schemas, setCurrentSchema } = useSchemaStore();
   const isDark = useThemeStore((s) => s.theme === 'dark');
   const [hovered, setHovered] = useState(false);
 
   const type = shape_type || 'rectangle';
   const min = MIN_SIZES[type] || MIN_SIZES.rectangle;
+  const fallback = DEFAULT_SIZES[type] || DEFAULT_SIZES.rectangle;
 
   const { w, h } = useStore(
     (s) => {
       const n = s.nodeInternals.get(id);
-      const fallback = DEFAULT_SIZES[type] || DEFAULT_SIZES.rectangle;
       return { w: n?.width ?? fallback.w, h: n?.height ?? fallback.h };
     },
     (a, b) => a.w === b.w && a.h === b.h
   );
 
+  const storedW = data.width ?? fallback.w;
+  const storedH = data.height ?? fallback.h;
+  const content = shapeContent(data, schemas);
+  // Combinazioni già verificate: evita di ritentare all'infinito se il salvataggio fallisce e viene annullato.
+  const checkedFitsRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!onAutoFit) return;
+    const key = [type, storedW, storedH, content.title, content.description, content.linkLabel, content.hasImage].join('\u0000');
+    if (checkedFitsRef.current.has(key)) return;
+    checkedFitsRef.current.add(key);
+    const next = fitShapeSize(type, content, { w: storedW, h: storedH });
+    if (next) onAutoFit(id, next);
+  }, [id, type, storedW, storedH, content.title, content.description, content.linkLabel, content.hasImage, onAutoFit]);
+
+  const box = textBoxFor(type);
   const borderColor = getBorderColor(hyperlink, isDark);
   const fg = text_color || DEFAULT_TEXT_COLOR;
 
@@ -110,7 +106,13 @@ export default function ShapeNode({ data, id, selected }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      pe-resize-handle"
+      <NodeResizer
+        isVisible={selected || hovered}
+        minWidth={min.w}
+        minHeight={min.h}
+        keepAspectRatio={LOCKED_RATIO.has(type)}
+        lineClassName="shape-resize-line"
+        handleClassName="shape-resize-handle"
       />
 
       {PINS.map(({ id: pinId, position }) => (
@@ -129,59 +131,45 @@ export default function ShapeNode({ data, id, selected }) {
 
       <div
         style={{
-          position: 'absolute', inset: 0,
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          padding: TEXT_PAD[type] || TEXT_PAD.rectangle,
+          position: 'absolute',
+          left: `${box.x * 100}%`, top: `${box.y * 100}%`,
+          width: `${box.w * 100}%`, height: `${box.h * 100}%`,
+          padding: `${box.padY}px ${box.padX}px`,
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
           overflow: 'hidden',
           pointerEvents: 'none',
         }}
       >
-        {image_url && (
-          <img src={image_url} alt="" style={{ width: '100%', height: 28, objectFit: 'cover', borderRadius: 3, marginBottom: 3 }} />
-        )}
-        {title && (
-          <div style={{ fontWeight: 700, color: fg, fontSize: 12, textAlign: 'center', lineHeight: 1.2 }}>
-            {title}
-          </div>
-        )}
-        {description && (
-          <div style={{ color: fg, opacity: 0.85, fontSize: 10, textAlign: 'center', marginTop: 2 }}>
-            {description}
-          </div>
-        )}
-        {hyperlink && (
-          <a
-            href={isSchemaLink ? '#' : hyperlink}
-            target={isSchemaLink ? undefined : '_blank'}
-            rel="noopener noreferrer"
-            onClick={handleLinkClick}
+        <div style={CONTENT_STYLE}>
+          {image_url && <img src={image_url} alt="" style={IMAGE_STYLE} />}
+          {title && <div style={{ ...TITLE_STYLE, color: fg }}>{title}</div>}
+          {description && <div style={{ ...DESCRIPTION_STYLE, color: fg }}>{description}</div>}
+          {hyperlink && (
+            <a
+              href={isSchemaLink ? '#' : hyperlink}
+              target={isSchemaLink ? undefined : '_blank'}
+              rel="noopener noreferrer"
+              onClick={handleLinkClick}
+              style={{ ...LINK_STYLE, pointerEvents: 'auto', color: fg, opacity: 0.9 }}
+            >
+              {content.linkLabel}
+            </a>
+          )}
+          <button
+            className="nodrag"
             style={{
-              pointerEvents: 'auto', color: fg, opacity: 0.9, fontSize: 10,
-              textDecoration: 'underline', marginTop: 2, textAlign: 'center',
+              ...EDIT_BUTTON_STYLE,
+              pointerEvents: 'auto',
+              background: 'rgba(255,255,255,0.25)',
+              color: fg,
+              cursor: 'pointer',
+              backdropFilter: 'blur(2px)',
             }}
+            onClick={() => onEdit(id)}
           >
-            {isSchemaLink ? (linkedSchema?.name || 'Schema') : 'Link'}
-          </a>
-        )}
-        <button
-          className="nodrag"
-          style={{
-            pointerEvents: 'auto',
-            marginTop: 4,
-            fontSize: 10,
-            background: 'rgba(255,255,255,0.25)',
-            color: fg,
-            border: '1px solid rgba(255,255,255,0.35)',
-            borderRadius: 5,
-            padding: '2px 8px',
-            cursor: 'pointer',
-            backdropFilter: 'blur(2px)',
-          }}
-          onClick={() => onEdit(id)}
-        >
-          Modifica
-        </button>
+            Modifica
+          </button>
+        </div>
       </div>
     </div>
   );

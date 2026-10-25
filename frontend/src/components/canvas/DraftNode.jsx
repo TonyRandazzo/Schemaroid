@@ -139,8 +139,8 @@ export default function DraftNode({ data }) {
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         onKeyDown={stop}
-        rows={2}
-        className="nodrag nowheel field mb-2.5 resize-none py-1.5"
+        rows={3}
+        className="nodrag nowheel field mb-2.5 max-h-72 resize-y py-1.5"
       />
 
       <div className="mb-2.5">
